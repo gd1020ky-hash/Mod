@@ -1,3 +1,4 @@
+
 {
     "geode": "5.10.1",
     "gd": {
@@ -7,6 +8,21 @@
     "name": "Ultimate GD Toolkit",
     "version": "v0.1.0",
     "developer": "gd1020ky",
-    "description": "An all-in-one Geometry Dash toolkit. Native .sm macro tools are in development.",
+    "description": "An all-in-one Geometry Dash toolkit with a modular menu and native .sm macro tools planned.",
+    "settings": {
+        "menu-theme": {
+            "name": "Menu Theme",
+            "description": "Choose the UGT button accent color.",
+            "type": "string",
+            "default": "Neon",
+            "one-of": [
+                "Neon",
+                "Purple",
+                "Green",
+                "Orange",
+                "Classic"
+            ]
+        }
+    },
     "dependencies": {}
 }
