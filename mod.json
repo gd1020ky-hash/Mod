@@ -1,4 +1,3 @@
-
 {
     "geode": "5.10.1",
     "gd": {
@@ -8,11 +7,11 @@
     "name": "Ultimate GD Toolkit",
     "version": "v0.1.0",
     "developer": "gd1020ky",
-    "description": "An all-in-one Geometry Dash toolkit with a modular menu and native .sm macro tools planned.",
+    "description": "An all-in-one Geometry Dash toolkit with a themed menu, Pathfinder entry, and gameplay update counter.",
     "settings": {
         "menu-theme": {
             "name": "Menu Theme",
-            "description": "Choose the UGT button accent color.",
+            "description": "Choose the UGT menu accent color.",
             "type": "string",
             "default": "Neon",
             "one-of": [
@@ -22,6 +21,12 @@
                 "Orange",
                 "Classic"
             ]
+        },
+        "frame-counter-enabled": {
+            "name": "Enable Gameplay Update Counter",
+            "description": "Show gameplay update counts while playing.",
+            "type": "bool",
+            "default": true
         }
     },
     "dependencies": {}
