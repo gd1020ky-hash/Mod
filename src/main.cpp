@@ -9,61 +9,149 @@ class $modify(UGTMenuLayer, MenuLayer) {
         if (!MenuLayer::init())
             return false;
 
-        auto theme = Mod::get()->getSettingValue<std::string>("menu-theme");
+        auto size = CCDirector::sharedDirector()->getWinSize();
 
-        ccColor3B themeColor = {0, 220, 255};
-
-        if (theme == "Purple")
-            themeColor = {190, 100, 255};
-        else if (theme == "Green")
-            themeColor = {80, 255, 130};
-        else if (theme == "Orange")
-            themeColor = {255, 160, 50};
-        else if (theme == "Classic")
-            themeColor = {255, 255, 255};
-
+        // Main UGT button
         auto sprite = ButtonSprite::create(
-            "UGT",
-            "goldFont.fnt",
-            "GJ_button_01.png",
-            0.8f
+            "UGT", "goldFont.fnt", "GJ_button_01.png", 0.8f
         );
 
         if (!sprite)
             return true;
 
-        sprite->setColor(themeColor);
+        auto theme = Mod::get()->getSettingValue<std::string>("menu-theme");
+
+        ccColor3B color = {0, 220, 255};
+        if (theme == "Purple") color = {190, 100, 255};
+        if (theme == "Green")  color = {80, 255, 130};
+        if (theme == "Orange") color = {255, 160, 50};
+        if (theme == "Classic") color = {255, 255, 255};
+
+        sprite->setColor(color);
 
         auto button = CCMenuItemSpriteExtra::create(
-            sprite,
-            this,
+            sprite, this,
             menu_selector(UGTMenuLayer::onToolkitButton)
         );
 
-        auto menu = CCMenu::create();
-        if (!menu || !button)
+        auto mainMenu = CCMenu::create();
+        if (!mainMenu || !button)
             return true;
 
-        menu->addChild(button);
-        menu->setPosition({60.f, CCDirector::sharedDirector()
-            ->getWinSize().height / 2.f});
+        mainMenu->addChild(button);
+        mainMenu->setPosition({60.f, size.height / 2.f});
+        this->addChild(mainMenu, 100);
 
-        this->addChild(menu, 100);
+        // Toolkit sections
+        auto panel = CCMenu::create();
+        if (!panel)
+            return true;
+
+        panel->setTag(7721);
+        panel->setPosition({60.f, size.height / 2.f});
+        panel->setVisible(false);
+
+        auto addTab = [panel](
+            const char* name,
+            float y,
+            SEL_MenuHandler callback,
+            CCNode* target
+        ) {
+            auto tabSprite = ButtonSprite::create(
+                name, "goldFont.fnt", "GJ_button_02.png", 0.65f
+            );
+            if (!tabSprite)
+                return;
+
+            auto item = CCMenuItemSpriteExtra::create(
+                tabSprite, target, callback
+            );
+            if (!item)
+                return;
+
+            item->setPosition({125.f, y});
+            panel->addChild(item);
+        };
+
+        addTab("Macro Lab",      90.f,
+            menu_selector(UGTMenuLayer::onMacroTab), this);
+        addTab("Pathfinder",     45.f,
+            menu_selector(UGTMenuLayer::onPathfinderTab), this);
+        addTab("Frame Counter",   0.f,
+            menu_selector(UGTMenuLayer::onFrameTab), this);
+        addTab("Creator Tools", -45.f,
+            menu_selector(UGTMenuLayer::onCreatorTab), this);
+        addTab("Settings",      -90.f,
+            menu_selector(UGTMenuLayer::onSettingsTab), this);
+
+        this->addChild(panel, 100);
         return true;
     }
 
     void onToolkitButton(CCObject*) {
+        auto panel = this->getChildByTag(7721);
+        if (panel)
+            panel->setVisible(!panel->isVisible());
+    }
+
+    void onMacroTab(CCObject*) {
+        FLAlertLayer::create(
+            "UGT - Macro Lab",
+            "Native format: .sm\n\n"
+            "Planned tools:\n"
+            "- Record and stop gameplay input\n"
+            "- Save and load .sm files\n"
+            "- Playback and replay controls\n\n"
+            "Recording and playback are not implemented yet.",
+            "Close"
+        )->show();
+    }
+
+    void onPathfinderTab(CCObject*) {
+        FLAlertLayer::create(
+            "UGT - Pathfinder",
+            "Level analysis and route planning.\n\n"
+            "Planned tools:\n"
+            "- Route and obstacle analysis\n"
+            "- Timing and path visualization\n\n"
+            "Pathfinding is not implemented yet.",
+            "Close"
+        )->show();
+    }
+
+    void onFrameTab(CCObject*) {
+        FLAlertLayer::create(
+            "UGT - Frame Counter",
+            "Planned tools:\n"
+            "- Frame and timing display\n"
+            "- Custom window settings\n"
+            "- Optional sound alerts\n\n"
+            "The live frame counter is not implemented yet.",
+            "Close"
+        )->show();
+    }
+
+    void onCreatorTab(CCObject*) {
+        FLAlertLayer::create(
+            "UGT - Creator Tools",
+            "Creator toolkit roadmap:\n"
+            "- Level-building utilities\n"
+            "- Decoration helpers\n"
+            "- Creator workflow tools\n\n"
+            "These tools are still in development.",
+            "Close"
+        )->show();
+    }
+
+    void onSettingsTab(CCObject*) {
         auto theme = Mod::get()->getSettingValue<std::string>("menu-theme");
 
         FLAlertLayer::create(
-            "Ultimate GD Toolkit",
-            "Welcome to the Toolkit!\\n\\n"
-            "Menu button: WORKING\\n"
-            "Theme setting: " + theme + "\\n\\n"
-            "Macro Recorder: Coming Soon\\n"
-            "Pathfinder: Coming Soon\\n"
-            "Frame Counter: Coming Soon\\n"
-            "Creator Tools: Coming Soon",
+            "UGT - Settings",
+            "Current theme: " + theme + "\n\n"
+            "To change the theme, open Geode's mod settings "
+            "and select Ultimate GD Toolkit.\n\n"
+            "Available themes: Neon, Purple, Green, Orange, Classic.",
             "Close"
         )->show();
     }
