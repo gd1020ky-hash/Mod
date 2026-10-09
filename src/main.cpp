@@ -1,4 +1,3 @@
-
 #include <Geode/Geode.hpp>
 #include <Geode/modify/MenuLayer.hpp>
 #include <Geode/modify/LevelSelectLayer.hpp>
@@ -8,8 +7,8 @@ using namespace geode::prelude;
 
 // ============================================================
 // ULTIMATE GD TOOLKIT
-// Floating menu, custom logo, level-select Pathfinder entry,
-// theme colors, and a gameplay update-frame counter.
+// Floating menu, custom logo, Pathfinder entry, themes,
+// and a gameplay update counter.
 // ============================================================
 
 namespace UGT {
@@ -39,15 +38,18 @@ namespace UGT {
         const char* title,
         const std::string& message
     ) {
-        FLAlertLayer::create(
+        auto alert = FLAlertLayer::create(
             title,
             message,
             "Close"
-        )->show();
+        );
+
+        if (alert)
+            alert->show();
     }
 
     static CCNode* createLogo(float maxWidth) {
-        // logo.png must be included in the mod resources.
+        // Make sure resources/logo.png exists in the repository.
         auto logo = CCSprite::create("logo.png"_spr);
 
         if (!logo)
@@ -109,13 +111,12 @@ class $modify(UGTMenuLayer, MenuLayer) {
         if (!menu)
             return true;
 
-        // Use the user's logo as the floating menu button.
         auto logo = UGT::createLogo(64.f);
 
         if (!logo) {
             log::error(
                 "UGT logo.png could not be loaded. "
-                "Check the resources configuration."
+                "Check resources/logo.png."
             );
 
             return true;
@@ -131,8 +132,6 @@ class $modify(UGTMenuLayer, MenuLayer) {
             return true;
 
         menu->addChild(button);
-
-        // Left side of the screen.
         menu->setPosition({
             48.f,
             winSize.height * 0.55f
@@ -140,7 +139,7 @@ class $modify(UGTMenuLayer, MenuLayer) {
 
         this->addChild(menu, 100);
 
-        // Create the toolkit panel.
+        // Toolkit panel.
         auto panel = CCNode::create();
 
         if (!panel)
@@ -155,7 +154,6 @@ class $modify(UGTMenuLayer, MenuLayer) {
         });
         panel->setVisible(false);
 
-        // Dark translucent background.
         auto background = CCLayerColor::create(
             {15, 20, 35, 235},
             300.f,
@@ -163,12 +161,10 @@ class $modify(UGTMenuLayer, MenuLayer) {
         );
 
         if (background) {
-            background->setAnchorPoint({0.5f, 0.5f});
             background->setPosition({0.f, 0.f});
             panel->addChild(background);
         }
 
-        // Logo at the top of the opened panel.
         auto panelLogo = UGT::createLogo(100.f);
 
         if (panelLogo) {
@@ -176,7 +172,6 @@ class $modify(UGTMenuLayer, MenuLayer) {
             panel->addChild(panelLogo);
         }
 
-        // Toolkit title.
         auto title = CCLabelBMFont::create(
             "ULTIMATE GD TOOLKIT",
             "goldFont.fnt"
@@ -189,7 +184,6 @@ class $modify(UGTMenuLayer, MenuLayer) {
             panel->addChild(title);
         }
 
-        // Toolkit section buttons.
         auto macro = UGT::createTextButton(
             "Macro Lab",
             menu_selector(UGTMenuLayer::onMacroTab),
@@ -245,22 +239,26 @@ class $modify(UGTMenuLayer, MenuLayer) {
             panel->addChild(settings);
         }
 
-        auto closeButton = CCMenuItemSpriteExtra::create(
-            ButtonSprite::create(
-                "X",
-                "goldFont.fnt",
-                "GJ_button_01.png",
-                0.65f
-            ),
-            this,
-            menu_selector(UGTMenuLayer::onClosePanel)
+        auto closeSprite = ButtonSprite::create(
+            "X",
+            "goldFont.fnt",
+            "GJ_button_01.png",
+            0.65f
         );
 
-        if (closeButton) {
-            auto closeMenu = CCMenu::create();
-            closeMenu->addChild(closeButton);
-            closeMenu->setPosition({280.f, 250.f});
-            panel->addChild(closeMenu);
+        if (closeSprite) {
+            auto closeButton = CCMenuItemSpriteExtra::create(
+                closeSprite,
+                this,
+                menu_selector(UGTMenuLayer::onClosePanel)
+            );
+
+            if (closeButton) {
+                auto closeMenu = CCMenu::create();
+                closeMenu->addChild(closeButton);
+                closeMenu->setPosition({280.f, 250.f});
+                panel->addChild(closeMenu);
+            }
         }
 
         this->addChild(panel, 101);
@@ -309,9 +307,9 @@ class $modify(UGTMenuLayer, MenuLayer) {
     void onFrameTab(CCObject*) {
         UGT::showMessage(
             "UGT - Frame Counter",
-            "The gameplay update-frame counter can be enabled "
+            "The gameplay update counter can be enabled "
             "in Geode mod settings.\n\n"
-            "Note: update frames are not the same as "
+            "It counts gameplay update calls, not "
             "precisely measured rendered frames."
         );
     }
@@ -343,7 +341,7 @@ class $modify(UGTMenuLayer, MenuLayer) {
 };
 
 // ============================================================
-// LEVEL SELECTION: add a dedicated Pathfinder entry
+// LEVEL SELECTION: dedicated Pathfinder entry
 // ============================================================
 
 class $modify(UGTLevelSelectLayer, LevelSelectLayer) {
@@ -369,8 +367,6 @@ class $modify(UGTLevelSelectLayer, LevelSelectLayer) {
             return true;
 
         menu->addChild(button);
-
-        // Keep the button near the left edge.
         menu->setPosition({
             78.f,
             winSize.height * 0.35f
@@ -394,10 +390,15 @@ class $modify(UGTLevelSelectLayer, LevelSelectLayer) {
 };
 
 // ============================================================
-// GAMEPLAY: optional update-frame counter
+// GAMEPLAY: optional update counter
 // ============================================================
 
 class $modify(UGTPlayLayer, PlayLayer) {
+    // Geode requires extra members in a Fields struct.
+    struct Fields {
+        unsigned int updateCount = 0;
+    };
+
     bool init(
         GJGameLevel* level,
         bool useReplay,
@@ -451,12 +452,11 @@ class $modify(UGTPlayLayer, PlayLayer) {
         if (!label)
             return;
 
-        // Counts gameplay update calls, not hardware-rendered frames.
-        ++m_ugtUpdateCount;
+        ++m_fields->updateCount;
 
         auto text = CCString::createWithFormat(
             "Updates: %u",
-            m_ugtUpdateCount
+            m_fields->updateCount
         );
 
         if (text) {
@@ -465,6 +465,4 @@ class $modify(UGTPlayLayer, PlayLayer) {
             );
         }
     }
-
-    unsigned int m_ugtUpdateCount = 0;
 };
