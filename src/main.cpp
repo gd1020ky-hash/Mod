@@ -1,101 +1,473 @@
+
 #include <Geode/Geode.hpp>
 #include <Geode/modify/MenuLayer.hpp>
-#include <Geode/modify/LevelSelectLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
+#include <Geode/modify/PlayerObject.hpp>
+#include <Geode/modify/PauseLayer.hpp>
+
+#include <cstdint>
+#include <fstream>
+#include <string>
+#include <vector>
 
 using namespace geode::prelude;
 
 // ============================================================
 // ULTIMATE GD TOOLKIT
-// Floating menu, custom logo, Pathfinder entry, themes,
-// and a gameplay update counter.
+// Phase 1: Native .sm macro recording and playback
 // ============================================================
 
 namespace UGT {
-    constexpr int MENU_TAG = 7721;
-    constexpr int FRAME_LABEL_TAG = 7722;
+    struct MacroEvent {
+        std::uint64_t frame;
+        int button;
+        bool pressed;
+        bool player2;
+    };
 
-    static ccColor3B getThemeColor() {
-        auto theme =
-            Mod::get()->getSettingValue<std::string>("menu-theme");
+    static std::vector<MacroEvent> events;
+    static std::uint64_t frame = 0;
+    static std::size_t playbackIndex = 0;
 
-        if (theme == "Purple")
-            return {190, 100, 255};
+    static bool recording = false;
+    static bool playing = false;
+    static bool injectingInput = false;
 
-        if (theme == "Green")
-            return {80, 255, 130};
+    static constexpr std::size_t MAX_EVENTS = 2000000;
 
-        if (theme == "Orange")
-            return {255, 160, 50};
-
-        if (theme == "Classic")
-            return {255, 255, 255};
-
-        return {0, 220, 255};
+    // Native macro file: latest.sm
+    static std::filesystem::path macroPath() {
+        auto dir = Mod::get()->getSaveDir() / "macros";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        return dir / "latest.sm";
     }
 
-    static void showMessage(
+    static void message(
         const char* title,
-        const std::string& message
+        const std::string& text
     ) {
-        auto alert = FLAlertLayer::create(
-            title,
-            message,
-            "Close"
-        );
-
-        if (alert)
-            alert->show();
+        auto alert = FLAlertLayer::create(title, text, "Close");
+        if (alert) alert->show();
     }
 
-    static CCNode* createLogo(float maxWidth) {
-        // Make sure resources/logo.png exists in the repository.
-        auto logo = CCSprite::create("logo.png"_spr);
+    // UGT_SM version 1 file format:
+    // UGT_SM 1 <event-count>
+    // <frame> <button> <pressed> <player2>
+    static bool saveMacro() {
+        if (events.empty()) return false;
 
-        if (!logo)
-            return nullptr;
+        std::ofstream file(macroPath());
+        if (!file.is_open()) return false;
 
-        auto size = logo->getContentSize();
+        file << "UGT_SM 1 " << events.size() << '\n';
 
-        if (size.width > 0.f && size.height > 0.f) {
-            float scale = maxWidth / size.width;
-
-            if (scale > 1.f)
-                scale = 1.f;
-
-            logo->setScale(scale);
+        for (auto const& event : events) {
+            file << event.frame << ' '
+                 << event.button << ' '
+                 << (event.pressed ? 1 : 0) << ' '
+                 << (event.player2 ? 1 : 0) << '\n';
         }
 
-        return logo;
+        file.flush();
+        return file.good();
     }
 
-    static CCMenuItemSpriteExtra* createTextButton(
-        const char* text,
-        SEL_MenuHandler callback,
-        CCObject* target
+    static bool loadMacro() {
+        std::ifstream file(macroPath());
+        if (!file.is_open()) return false;
+
+        std::string magic;
+        int version = 0;
+        std::uint64_t count = 0;
+
+        if (!(file >> magic >> version >> count) ||
+            magic != "UGT_SM" ||
+            version != 1 ||
+            count == 0 ||
+            count > MAX_EVENTS) {
+            return false;
+        }
+
+        std::vector<MacroEvent> loaded;
+        loaded.reserve(static_cast<std::size_t>(count));
+
+        std::uint64_t previousFrame = 0;
+
+        for (std::uint64_t i = 0; i < count; ++i) {
+            std::uint64_t f;
+            int button, pressed, player2;
+
+            if (!(file >> f >> button >> pressed >> player2))
+                return false;
+
+            if (button < 0 || button > 255 ||
+                (pressed != 0 && pressed != 1) ||
+                (player2 != 0 && player2 != 1) ||
+                (i > 0 && f < previousFrame)) {
+                return false;
+            }
+
+            loaded.push_back({
+                f, button, pressed == 1, player2 == 1
+            });
+
+            previousFrame = f;
+        }
+
+        events = std::move(loaded);
+        playbackIndex = 0;
+        return true;
+    }
+
+    static void recordInput(
+        PlayerObject* player,
+        PlayerButton button,
+        bool pressed
     ) {
-        auto sprite = ButtonSprite::create(
-            text,
-            "goldFont.fnt",
-            "GJ_button_02.png",
-            0.65f
-        );
+        if (!recording || injectingInput || !player)
+            return;
 
-        if (!sprite)
-            return nullptr;
+        auto* layer = PlayLayer::get();
+        if (!layer) return;
 
-        sprite->setColor(getThemeColor());
+        bool player2 = player == layer->m_player2;
 
-        return CCMenuItemSpriteExtra::create(
-            sprite,
-            target,
-            callback
-        );
+        if (player != layer->m_player1 && !player2)
+            return;
+
+        events.push_back({
+            frame,
+            static_cast<int>(button),
+            pressed,
+            player2
+        });
+    }
+
+    static void applyEvent(MacroEvent const& event) {
+        auto* layer = PlayLayer::get();
+        if (!layer) return;
+
+        auto* player = event.player2
+            ? layer->m_player2
+            : layer->m_player1;
+
+        if (!player) return;
+
+        auto button = static_cast<PlayerButton>(event.button);
+
+        injectingInput = true;
+
+        if (event.pressed)
+            player->pushButton(button);
+        else
+            player->releaseButton(button);
+
+        injectingInput = false;
+    }
+
+    static void stopPlayback() {
+        playing = false;
+        playbackIndex = 0;
+
+        if (auto* layer = PlayLayer::get()) {
+            injectingInput = true;
+
+            if (layer->m_player1)
+                layer->m_player1->releaseAllButtons();
+
+            if (layer->m_player2)
+                layer->m_player2->releaseAllButtons();
+
+            injectingInput = false;
+        }
     }
 }
 
 // ============================================================
-// MAIN MENU: floating logo button and toolkit panel
+// PLAYER INPUT HOOKS
+// ============================================================
+
+class $modify(UGTPlayerObject, PlayerObject) {
+    bool pushButton(PlayerButton button) {
+        if (UGT::playing && !UGT::injectingInput)
+            return false;
+
+        bool result = PlayerObject::pushButton(button);
+
+        UGT::recordInput(this, button, true);
+        return result;
+    }
+
+    bool releaseButton(PlayerButton button) {
+        if (UGT::playing && !UGT::injectingInput)
+            return false;
+
+        bool result = PlayerObject::releaseButton(button);
+
+        UGT::recordInput(this, button, false);
+        return result;
+    }
+};
+
+// ============================================================
+// GAMEPLAY FRAME TRACKING AND PLAYBACK
+// ============================================================
+
+class $modify(UGTPlayLayer, PlayLayer) {
+    bool init(
+        GJGameLevel* level,
+        bool useReplay,
+        bool dontCreateObjects
+    ) {
+        if (!PlayLayer::init(
+            level, useReplay, dontCreateObjects
+        )) {
+            return false;
+        }
+
+        UGT::frame = 0;
+        UGT::playbackIndex = 0;
+
+        return true;
+    }
+
+    void update(float dt) {
+        if (UGT::playing) {
+            while (
+                UGT::playbackIndex < UGT::events.size() &&
+                UGT::events[UGT::playbackIndex].frame <= UGT::frame
+            ) {
+                UGT::applyEvent(
+                    UGT::events[UGT::playbackIndex]
+                );
+
+                ++UGT::playbackIndex;
+            }
+
+            if (UGT::playbackIndex >= UGT::events.size()) {
+                UGT::stopPlayback();
+            }
+        }
+
+        PlayLayer::update(dt);
+        ++UGT::frame;
+    }
+
+    void resetLevel() {
+        if (UGT::recording)
+            UGT::recording = false;
+
+        PlayLayer::resetLevel();
+
+        UGT::frame = 0;
+        UGT::playbackIndex = 0;
+    }
+
+    void onQuit() {
+        UGT::recording = false;
+        UGT::stopPlayback();
+
+        PlayLayer::onQuit();
+    }
+};
+
+// ============================================================
+// PAUSE MENU CONTROLS
+// ============================================================
+
+class $modify(UGTPauseLayer, PauseLayer) {
+    void customSetup() {
+        PauseLayer::customSetup();
+
+        auto win = CCDirector::sharedDirector()->getWinSize();
+
+        auto menu = CCMenu::create();
+        if (!menu) return;
+
+        menu->setPosition({
+            win.width * 0.5f,
+            32.f
+        });
+
+        auto addButton = [&](const char* label,
+                             SEL_MenuHandler callback) {
+            auto sprite = ButtonSprite::create(
+                label,
+                "goldFont.fnt",
+                "GJ_button_02.png",
+                0.65f
+            );
+
+            if (!sprite) return;
+
+            auto item = CCMenuItemSpriteExtra::create(
+                sprite, this, callback
+            );
+
+            if (item) {
+                item->setScale(0.7f);
+                menu->addChild(item);
+            }
+        };
+
+        addButton(
+            "REC / STOP",
+            menu_selector(UGTPauseLayer::onRecord)
+        );
+
+        addButton(
+            "SAVE .SM",
+            menu_selector(UGTPauseLayer::onSave)
+        );
+
+        addButton(
+            "LOAD .SM",
+            menu_selector(UGTPauseLayer::onLoad)
+        );
+
+        addButton(
+            "PLAY / STOP",
+            menu_selector(UGTPauseLayer::onPlayback)
+        );
+
+        auto children = menu->getChildren();
+
+        if (children && children->count() == 4) {
+            static_cast<CCNode*>(children->objectAtIndex(0))
+                ->setPosition({-132.f, 0.f});
+
+            static_cast<CCNode*>(children->objectAtIndex(1))
+                ->setPosition({-44.f, 0.f});
+
+            static_cast<CCNode*>(children->objectAtIndex(2))
+                ->setPosition({44.f, 0.f});
+
+            static_cast<CCNode*>(children->objectAtIndex(3))
+                ->setPosition({132.f, 0.f});
+        }
+
+        this->addChild(menu, 100);
+    }
+
+    void onRecord(CCObject*) {
+        if (UGT::playing) {
+            UGT::message(
+                "UGT Macro Lab",
+                "Stop playback before recording."
+            );
+            return;
+        }
+
+        if (!UGT::recording) {
+            UGT::events.clear();
+            UGT::recording = true;
+
+            UGT::message(
+                "UGT",
+                "Recording started. Play, pause, then save "
+                "your recording as a .sm macro."
+            );
+        } else {
+            UGT::recording = false;
+
+            UGT::message(
+                "UGT",
+                fmt::format(
+                    "Recording stopped. Captured {} events.",
+                    UGT::events.size()
+                )
+            );
+        }
+    }
+
+    void onSave(CCObject*) {
+        UGT::recording = false;
+
+        if (!UGT::saveMacro()) {
+            UGT::message(
+                "UGT",
+                "Save failed. Record some input events first."
+            );
+            return;
+        }
+
+        UGT::message(
+            "UGT",
+            "Saved native .sm macro to the mod's macros folder."
+        );
+    }
+
+    void onLoad(CCObject*) {
+        if (UGT::recording || UGT::playing) {
+            UGT::message(
+                "UGT",
+                "Stop recording or playback before loading."
+            );
+            return;
+        }
+
+        if (!UGT::loadMacro()) {
+            UGT::message(
+                "UGT",
+                "No valid latest.sm file found. Record and save "
+                "a macro first."
+            );
+            return;
+        }
+
+        UGT::message(
+            "UGT",
+            fmt::format(
+                "Loaded {} input events.",
+                UGT::events.size()
+            )
+        );
+    }
+
+    void onPlayback(CCObject*) {
+        if (UGT::playing) {
+            UGT::stopPlayback();
+            UGT::message("UGT", "Playback stopped.");
+            return;
+        }
+
+        if (UGT::recording) {
+            UGT::message(
+                "UGT",
+                "Stop recording before playback."
+            );
+            return;
+        }
+
+        if (UGT::events.empty() && !UGT::loadMacro()) {
+            UGT::message(
+                "UGT",
+                "No macro loaded. Record and save first."
+            );
+            return;
+        }
+
+        auto* layer = PlayLayer::get();
+        if (!layer) return;
+
+        // Restart to align the recorded frame timeline.
+        layer->resetLevel();
+
+        UGT::frame = 0;
+        UGT::playbackIndex = 0;
+        UGT::playing = true;
+
+        UGT::message(
+            "UGT",
+            "Playback is armed. Close this message and resume "
+            "the level. Test in Practice Mode first."
+        );
+    }
+};
+
+// ============================================================
+// MAIN MENU: minimal toolkit entry point
 // ============================================================
 
 class $modify(UGTMenuLayer, MenuLayer) {
@@ -103,366 +475,42 @@ class $modify(UGTMenuLayer, MenuLayer) {
         if (!MenuLayer::init())
             return false;
 
-        auto winSize =
-            CCDirector::sharedDirector()->getWinSize();
-
-        auto menu = CCMenu::create();
-
-        if (!menu)
-            return true;
-
-        auto logo = UGT::createLogo(64.f);
-
-        if (!logo) {
-            log::error(
-                "UGT logo.png could not be loaded. "
-                "Check resources/logo.png."
-            );
-
-            return true;
-        }
-
-        auto button = CCMenuItemSpriteExtra::create(
-            logo,
-            this,
-            menu_selector(UGTMenuLayer::onToolkitButton)
-        );
-
-        if (!button)
-            return true;
-
-        menu->addChild(button);
-        menu->setPosition({
-            48.f,
-            winSize.height * 0.55f
-        });
-
-        this->addChild(menu, 100);
-
-        // Toolkit panel.
-        auto panel = CCNode::create();
-
-        if (!panel)
-            return true;
-
-        panel->setTag(UGT::MENU_TAG);
-        panel->setContentSize({300.f, 270.f});
-        panel->setAnchorPoint({0.5f, 0.5f});
-        panel->setPosition({
-            winSize.width * 0.5f,
-            winSize.height * 0.5f
-        });
-        panel->setVisible(false);
-
-        auto background = CCLayerColor::create(
-            {15, 20, 35, 235},
-            300.f,
-            270.f
-        );
-
-        if (background) {
-            background->setPosition({0.f, 0.f});
-            panel->addChild(background);
-        }
-
-        auto panelLogo = UGT::createLogo(100.f);
-
-        if (panelLogo) {
-            panelLogo->setPosition({150.f, 232.f});
-            panel->addChild(panelLogo);
-        }
-
-        auto title = CCLabelBMFont::create(
-            "ULTIMATE GD TOOLKIT",
-            "goldFont.fnt"
-        );
-
-        if (title) {
-            title->setScale(0.48f);
-            title->setColor(UGT::getThemeColor());
-            title->setPosition({150.f, 205.f});
-            panel->addChild(title);
-        }
-
-        auto macro = UGT::createTextButton(
-            "Macro Lab",
-            menu_selector(UGTMenuLayer::onMacroTab),
-            this
-        );
-
-        auto pathfinder = UGT::createTextButton(
-            "Pathfinder",
-            menu_selector(UGTMenuLayer::onPathfinderTab),
-            this
-        );
-
-        auto frame = UGT::createTextButton(
-            "Frame Counter",
-            menu_selector(UGTMenuLayer::onFrameTab),
-            this
-        );
-
-        auto creator = UGT::createTextButton(
-            "Creator Tools",
-            menu_selector(UGTMenuLayer::onCreatorTab),
-            this
-        );
-
-        auto settings = UGT::createTextButton(
-            "Settings",
-            menu_selector(UGTMenuLayer::onSettingsTab),
-            this
-        );
-
-        if (macro) {
-            macro->setPosition({150.f, 168.f});
-            panel->addChild(macro);
-        }
-
-        if (pathfinder) {
-            pathfinder->setPosition({150.f, 130.f});
-            panel->addChild(pathfinder);
-        }
-
-        if (frame) {
-            frame->setPosition({150.f, 92.f});
-            panel->addChild(frame);
-        }
-
-        if (creator) {
-            creator->setPosition({150.f, 54.f});
-            panel->addChild(creator);
-        }
-
-        if (settings) {
-            settings->setPosition({150.f, 16.f});
-            panel->addChild(settings);
-        }
-
-        auto closeSprite = ButtonSprite::create(
-            "X",
+        auto win = CCDirector::sharedDirector()->getWinSize();
+        auto sprite = ButtonSprite::create(
+            "Ultimate GD Toolkit",
             "goldFont.fnt",
-            "GJ_button_01.png",
-            0.65f
+            "GJ_button_02.png",
+            0.7f
         );
 
-        if (closeSprite) {
-            auto closeButton = CCMenuItemSpriteExtra::create(
-                closeSprite,
-                this,
-                menu_selector(UGTMenuLayer::onClosePanel)
-            );
+        if (!sprite) return true;
 
-            if (closeButton) {
-                auto closeMenu = CCMenu::create();
-                closeMenu->addChild(closeButton);
-                closeMenu->setPosition({280.f, 250.f});
-                panel->addChild(closeMenu);
-            }
-        }
-
-        this->addChild(panel, 101);
-
-        return true;
-    }
-
-    void onToolkitButton(CCObject*) {
-        auto panel = this->getChildByTag(UGT::MENU_TAG);
-
-        if (panel)
-            panel->setVisible(!panel->isVisible());
-    }
-
-    void onClosePanel(CCObject*) {
-        auto panel = this->getChildByTag(UGT::MENU_TAG);
-
-        if (panel)
-            panel->setVisible(false);
-    }
-
-    void onMacroTab(CCObject*) {
-        UGT::showMessage(
-            "UGT - Macro Lab",
-            "Native format: .sm\n\n"
-            "Planned features:\n"
-            "- Record and stop inputs\n"
-            "- Save and load .sm files\n"
-            "- Playback controls\n\n"
-            "Recording and playback are not implemented yet."
+        auto item = CCMenuItemSpriteExtra::create(
+            sprite,
+            this,
+            menu_selector(UGTMenuLayer::onToolkit)
         );
-    }
-
-    void onPathfinderTab(CCObject*) {
-        UGT::showMessage(
-            "UGT - Pathfinder",
-            "Pathfinder menu\n\n"
-            "Planned features:\n"
-            "- Route planning\n"
-            "- Obstacle analysis\n"
-            "- Timing visualization\n\n"
-            "The pathfinding engine is not implemented yet."
-        );
-    }
-
-    void onFrameTab(CCObject*) {
-        UGT::showMessage(
-            "UGT - Frame Counter",
-            "The gameplay update counter can be enabled "
-            "in Geode mod settings.\n\n"
-            "It counts gameplay update calls, not "
-            "precisely measured rendered frames."
-        );
-    }
-
-    void onCreatorTab(CCObject*) {
-        UGT::showMessage(
-            "UGT - Creator Tools",
-            "Creator Tools roadmap\n\n"
-            "- Level-building utilities\n"
-            "- Decoration helpers\n"
-            "- Creator workflow tools\n\n"
-            "These tools are still in development."
-        );
-    }
-
-    void onSettingsTab(CCObject*) {
-        auto theme =
-            Mod::get()->getSettingValue<std::string>("menu-theme");
-
-        UGT::showMessage(
-            "UGT - Settings",
-            "Current theme: " + theme +
-            "\n\nChange the theme in Geode's settings "
-            "for Ultimate GD Toolkit.\n\n"
-            "Available themes: Neon, Purple, Green, "
-            "Orange, Classic."
-        );
-    }
-};
-
-// ============================================================
-// LEVEL SELECTION: dedicated Pathfinder entry
-// ============================================================
-
-class $modify(UGTLevelSelectLayer, LevelSelectLayer) {
-    bool init(int page) {
-        if (!LevelSelectLayer::init(page))
-            return false;
-
-        auto winSize =
-            CCDirector::sharedDirector()->getWinSize();
 
         auto menu = CCMenu::create();
+        if (!item || !menu) return true;
 
-        if (!menu)
-            return true;
-
-        auto button = UGT::createTextButton(
-            "UGT Pathfinder",
-            menu_selector(UGTLevelSelectLayer::onPathfinder),
-            this
-        );
-
-        if (!button)
-            return true;
-
-        menu->addChild(button);
+        menu->addChild(item);
         menu->setPosition({
-            78.f,
-            winSize.height * 0.35f
+            win.width * 0.5f,
+            30.f
         });
 
         this->addChild(menu, 100);
-
         return true;
     }
 
-    void onPathfinder(CCObject*) {
-        UGT::showMessage(
-            "UGT - Pathfinder",
-            "Level Selection Pathfinder\n\n"
-            "This is the entry point for the planned "
-            "level route-analysis tools.\n\n"
-            "Route calculation and obstacle analysis "
-            "are not implemented yet."
+    void onToolkit(CCObject*) {
+        UGT::message(
+            "Ultimate GD Toolkit",
+            "Phase 1: native .sm macro recording, save/load, "
+            "and playback controls in the pause menu.\\n\\n"
+            "Pathfinder, advanced frame timing, speed/music sync, "
+            "and automatic decoration are future phases."
         );
-    }
-};
-
-// ============================================================
-// GAMEPLAY: optional update counter
-// ============================================================
-
-class $modify(UGTPlayLayer, PlayLayer) {
-    // Geode requires extra members in a Fields struct.
-    struct Fields {
-        unsigned int updateCount = 0;
-    };
-
-    bool init(
-        GJGameLevel* level,
-        bool useReplay,
-        bool dontCreateObjects
-    ) {
-        if (!PlayLayer::init(
-            level,
-            useReplay,
-            dontCreateObjects
-        )) {
-            return false;
-        }
-
-        if (!Mod::get()->getSettingValue<bool>(
-            "frame-counter-enabled"
-        )) {
-            return true;
-        }
-
-        auto winSize =
-            CCDirector::sharedDirector()->getWinSize();
-
-        auto label = CCLabelBMFont::create(
-            "Updates: 0",
-            "bigFont.fnt"
-        );
-
-        if (!label)
-            return true;
-
-        label->setTag(UGT::FRAME_LABEL_TAG);
-        label->setScale(0.45f);
-        label->setAnchorPoint({0.f, 1.f});
-        label->setPosition({
-            12.f,
-            winSize.height - 12.f
-        });
-        label->setColor(UGT::getThemeColor());
-
-        this->addChild(label, 1000);
-
-        return true;
-    }
-
-    void update(float dt) {
-        PlayLayer::update(dt);
-
-        auto label =
-            this->getChildByTag(UGT::FRAME_LABEL_TAG);
-
-        if (!label)
-            return;
-
-        ++m_fields->updateCount;
-
-        auto text = CCString::createWithFormat(
-            "Updates: %u",
-            m_fields->updateCount
-        );
-
-        if (text) {
-            static_cast<CCLabelBMFont*>(label)->setString(
-                text->getCString()
-            );
-        }
     }
 };
