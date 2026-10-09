@@ -1,0 +1,12 @@
+{
+    "geode": "v5.10.0",
+    "gd": {
+        "android": "2.2081"
+    },
+    "id": "gd1020ky.ultimate-gd-toolkit",
+    "name": "Ultimate GD Toolkit",
+    "version": "v0.1.0",
+    "developer": "gd1020ky",
+    "description": "An all-in-one Geometry Dash toolkit. Native .sm macro tools are in development.",
+    "dependencies": {}
+}
